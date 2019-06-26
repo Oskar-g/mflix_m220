@@ -1,5 +1,6 @@
 package mflix.api.daos;
 
+import com.mongodb.client.AggregateIterable;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.*;
@@ -14,6 +15,9 @@ import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 
+import static com.mongodb.client.model.Filters.all;
+import static com.mongodb.client.model.Projections.*;
+
 @Component
 public class MovieDao extends AbstractMFlixDao {
 
@@ -23,15 +27,27 @@ public class MovieDao extends AbstractMFlixDao {
 
   @Autowired
   public MovieDao(
-      MongoClient mongoClient, @Value("${spring.mongodb.database}") String databaseName) {
+          MongoClient mongoClient, @Value("${spring.mongodb.database}") String databaseName) {
     super(mongoClient, databaseName);
     moviesCollection = db.getCollection(MOVIES_COLLECTION);
   }
 
   @SuppressWarnings("unchecked")
-  private Bson buildLookupStage() {
-    return null;
+  private Bson buildLookupStage(){
+    List<Variable<String>> let = new ArrayList<>();
+    let.add(new Variable("id", "$_id"));
 
+    // lookup pipeline
+    Bson exprMatch = Document.parse("{'$expr': {'$eq': ['$movie_id', '$$id']}}");
+
+    Bson lookupMatch = Aggregates.match(exprMatch);
+    List<Bson> lookUpPipeline = new ArrayList<>();
+    // lookup sort stage
+    Bson sortLookup = Aggregates.sort(Sorts.descending("date"));
+
+    lookUpPipeline.add(lookupMatch);
+    lookUpPipeline.add(sortLookup);
+    return Aggregates.lookup("comments", let, lookUpPipeline, "comments");
   }
 
   /**
@@ -64,8 +80,9 @@ public class MovieDao extends AbstractMFlixDao {
     // match stage to find movie
     Bson match = Aggregates.match(Filters.eq("_id", new ObjectId(movieId)));
     pipeline.add(match);
-    // TODO> Ticket: Get Comments - implement the lookup stage that allows the comments to
-    // retrieved with Movies.
+    Bson lookup = buildLookupStage();
+    pipeline.add(lookup);
+
     Document movie = moviesCollection.aggregate(pipeline).first();
 
     return movie;
@@ -118,14 +135,22 @@ public class MovieDao extends AbstractMFlixDao {
    */
   public List<Document> getMoviesByCountry(String... country) {
 
+    List<Document> movies = new ArrayList<>();
     Bson queryFilter = Filters.in("countries", country);
     Bson projection = Projections.include("title");
-    List<Document> movies = new ArrayList<>();
+
+    moviesCollection.find(queryFilter)
+            .projection(projection)
+            .into(movies);
+
+    //Otra forma de hacero...
+    /*
     moviesCollection
             .find(queryFilter)
             .projection(projection)
             .iterator()
             .forEachRemaining(movies::add);
+    */
     return movies;
   }
 

@@ -78,13 +78,13 @@ public class CommentDao extends AbstractMFlixDao {
    * @throw IncorrectDaoOperation if the insert fails, otherwise
    * returns the resulting Comment object.
    */
-  public Comment addComment(Comment comment) {
+  public Comment addComment(Comment comment){
 
-    // TODO> Ticket - Update User reviews: implement the functionality that enables adding a new
-    // comment.
-    // TODO> Ticket - Handling Errors: Implement a try catch block to
-    // handle a potential write exception when given a wrong commentId.
-    return null;
+    if ( comment.getId()==null || comment.getId().isEmpty()) {
+      throw new IncorrectDaoOperation("Comment objects need to have an id field set.");
+    }
+    commentCollection.insertOne(comment);
+    return comment;
   }
 
   /**
@@ -100,12 +100,25 @@ public class CommentDao extends AbstractMFlixDao {
    * @param email - user email.
    * @return true if successfully updates the comment text.
    */
-  public boolean updateComment(String commentId, String text, String email) {
+  public boolean updateComment(String commentId, String text, String email){
 
-    // TODO> Ticket - Update User reviews: implement the functionality that enables updating an
-    // user own comments
-    // TODO> Ticket - Handling Errors: Implement a try catch block to
-    // handle a potential write exception when given a wrong commentId.
+    Bson filter = Filters.and(
+            Filters.eq("email", email),
+            Filters.eq("_id", new ObjectId(commentId)));
+    Bson update = Updates.combine(
+            Updates.set("text", text),
+            Updates.set("date", new Date())) ;
+    UpdateResult res = commentCollection.updateOne(filter, update);
+
+    if(res.getMatchedCount() > 0){
+
+      if (res.getModifiedCount() != 1){
+        log.warn("Comment `{}` text was not updated. Is it the same text?");
+      }
+
+      return true;
+    }
+    log.error("Could not update comment `{}`. Make sure the comment is owned by `{}`",  commentId, email);
     return false;
   }
 
@@ -117,11 +130,22 @@ public class CommentDao extends AbstractMFlixDao {
    * @return true if successful deletes the comment.
    */
   public boolean deleteComment(String commentId, String email) {
-    // TODO> Ticket Delete Comments - Implement the method that enables the deletion of a user
-    // comment
-    // TIP: make sure to match only users that own the given commentId
-    // TODO> Ticket Handling Errors - Implement a try catch block to
-    // handle a potential write exception when given a wrong commentId.
+    Bson filter = Filters.and(
+            Filters.eq("email", email),
+            Filters.eq("_id", new ObjectId(commentId))
+            );
+
+    DeleteResult res = commentCollection.deleteOne(filter);
+
+    if(res.getDeletedCount() > 0){
+
+      if (res.getDeletedCount() != 1){
+        log.warn("Comment `{}` text was not deleted. Is it the same text?");
+      }
+
+      return true;
+    }
+    log.error("Could not delete comment `{}`. Make sure the comment is owned by `{}`",  commentId, email);
     return false;
   }
 
@@ -134,12 +158,41 @@ public class CommentDao extends AbstractMFlixDao {
    */
   public List<Critic> mostActiveCommenters() {
     List<Critic> mostActive = new ArrayList<>();
-    // // TODO> Ticket: User Report - execute a command that returns the
-    // // list of 20 users, group by number of comments. Don't forget,
-    // // this report is expected to be produced with an high durability
-    // // guarantee for the returned documents. Once a commenter is in the
-    // // top 20 of users, they become a Critic, so mostActive is composed of
-    // // Critic objects.
+
+    /**
+     * In this method we can use the $sortByCount stage:
+     * https://docs.mongodb.com/manual/reference/operator/aggregation/sortByCount/index.html
+     * using the $email field expression.
+     */
+    Bson groupByCountStage = Aggregates.sortByCount("$email");
+    // Let's sort descending on the `count` of comments
+    Bson sortStage = Aggregates.sort(Sorts.descending("count"));
+    // Given that we are required the 20 top users we have to also $limit
+    // the resulting list
+    Bson limitStage = Aggregates.limit(20);
+    // Add the stages to a pipeline
+    List<Bson> pipeline = new ArrayList<>();
+    pipeline.add(groupByCountStage);
+    pipeline.add(sortStage);
+    pipeline.add(limitStage);
+
+    // We cannot use the CommentDao class `commentCollection` object
+    // since this returns Comment objects.
+    // We need to create a new collection instance that returns
+    // Critic objects instead.
+    // Given that this report is required to be accurate and
+    // reliable, we want to guarantee a high level of durability, by
+    // ensuring that the majority of nodes in our Replica Set
+    // acknowledged all documents for this query. Therefore we will be
+    // setting our ReadConcern to "majority"
+    // https://docs.mongodb.com/manual/reference/method/cursor.readConcern/
+    MongoCollection<Critic> commentCriticCollection =
+            this.db.getCollection("comments", Critic.class)
+                    .withCodecRegistry(this.pojoCodecRegistry)
+                    .withReadConcern(ReadConcern.MAJORITY);
+
+    // And execute the aggregation command output in our collection object.
+    commentCriticCollection.aggregate(pipeline).into(mostActive);
     return mostActive;
   }
 }
