@@ -1,6 +1,7 @@
 package mflix.api.daos;
 
 import com.mongodb.MongoClientSettings;
+import com.mongodb.MongoWriteException;
 import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
@@ -20,6 +21,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 
+import java.text.MessageFormat;
 import java.util.Map;
 
 import static org.bson.codecs.configuration.CodecRegistries.fromProviders;
@@ -54,8 +56,16 @@ public class UserDao extends AbstractMFlixDao {
    * @return True if successful, throw IncorrectDaoOperation otherwise
    */
   public boolean addUser(User user) {
-    usersCollection.withWriteConcern(WriteConcern.MAJORITY).insertOne(user);
-    return true;
+    try {
+      usersCollection.withWriteConcern(WriteConcern.MAJORITY).insertOne(user);
+      return true;
+
+    } catch (MongoWriteException e) {
+      log.error(
+              "Could not insert `{}` into `users` collection: {}", user.getEmail(), e.getMessage());
+      throw new IncorrectDaoOperation(
+              MessageFormat.format("User with email `{0}` already exists", user.getEmail()));
+    }
   }
 
   /**
@@ -66,11 +76,18 @@ public class UserDao extends AbstractMFlixDao {
    * @return true if successful
    */
   public boolean createUserSession(String userId, String jwt) {
-    Bson updateFilter = new Document("user_id", userId);
-    Bson setUpdate = Updates.set("jwt", jwt);
-    UpdateOptions options = new UpdateOptions().upsert(true);
-    sessionsCollection.updateOne(updateFilter, setUpdate, options);
-    return true;
+    try {
+      Bson updateFilter = new Document("user_id", userId);
+      Bson setUpdate = Updates.set("jwt", jwt);
+      UpdateOptions options = new UpdateOptions().upsert(true);
+      sessionsCollection.updateOne(updateFilter, setUpdate, options);
+      return true;
+    } catch (MongoWriteException e) {
+      String errorMessage =
+              MessageFormat.format(
+                      "Unable to $set jwt token in sessions collection: {}", e.getMessage());
+      throw new IncorrectDaoOperation(errorMessage, e);
+    }
   }
 
   /**
@@ -111,15 +128,24 @@ public class UserDao extends AbstractMFlixDao {
    */
   public boolean deleteUser(String email) {
     // remove user sessions
-    if (deleteUserSessions(email)) {
-      Document userDeleteFilter = new Document("email", email);
-      DeleteResult res = usersCollection.deleteOne(userDeleteFilter);
+    try {
+      if (deleteUserSessions(email)) {
+        Document userDeleteFilter = new Document("email", email);
+        DeleteResult res = usersCollection.deleteOne(userDeleteFilter);
 
-      if (res.getDeletedCount() < 0) {
-        log.warn("User with `email` {} not found. Potential concurrent operation?!");
+        if (res.getDeletedCount() < 0) {
+          log.warn("User with `email` {} not found. Potential concurrent operation?!");
+        }
+
+        return res.wasAcknowledged();
       }
+    } catch (Exception e) {
+      String errorMessage = MessageFormat.format("Issue caught while trying to " +
+                      "delete user `{}`: {}",
+              email,
+              e.getMessage());
+      throw new IncorrectDaoOperation(errorMessage);
 
-      return res.wasAcknowledged();
     }
     return false;
   }
@@ -132,22 +158,30 @@ public class UserDao extends AbstractMFlixDao {
    *     ones. Cannot be set to null value
    * @return User object that just been updated.
    */
-  public boolean updateUserPreferences(String email, Map<String, ?> userPreferences){
+  public boolean updateUserPreferences(String email, Map<String, ?> userPreferences) {
 
     // make sure to check if userPreferences are not null. If null, return false immediately.
-    if(userPreferences == null){
-      throw new IncorrectDaoOperation(
-              "userPreferences cannot be set to null");
+    if (userPreferences == null) {
+      throw new IncorrectDaoOperation("userPreferences cannot be set to null");
     }
     // create query filter and update object.
     Bson updateFilter = new Document("email", email);
     Bson updateObject = Updates.set("preferences", userPreferences);
-    // update one document matching email.
-    UpdateResult res = usersCollection.updateOne(updateFilter, updateObject);
-    if(res.getModifiedCount() < 1){
-      log.warn("User `{}` was not updated. Trying to re-write the same `preferences` field: `{}`",
-              email, userPreferences);
+    try {
+      // update one document matching email.
+      UpdateResult res = usersCollection.updateOne(updateFilter, updateObject);
+      if (res.getModifiedCount() < 1) {
+        log.warn(
+                "User `{}` was not updated. Trying to re-write the same `preferences` field: `{}`",
+                email,
+                userPreferences);
+      }
+      return true;
+    } catch (MongoWriteException e) {
+      String errorMessage =
+              MessageFormat.format(
+                      "Issue caught while trying to update user `{}`: {}", email, e.getMessage());
+      throw new IncorrectDaoOperation(errorMessage);
     }
-    return true;
   }
 }
