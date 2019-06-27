@@ -1,6 +1,5 @@
 package mflix.api.daos;
 
-import com.mongodb.client.AggregateIterable;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.*;
@@ -14,9 +13,6 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
-
-import static com.mongodb.client.model.Filters.all;
-import static com.mongodb.client.model.Projections.*;
 
 @Component
 public class MovieDao extends AbstractMFlixDao {
@@ -58,9 +54,12 @@ public class MovieDao extends AbstractMFlixDao {
    * @return true if valid movieId.
    */
   private boolean validIdValue(String movieId) {
-    //TODO> Ticket: Handling Errors - implement a way to catch a
-    //any potential exceptions thrown while validating a movie id.
-    //Check out this method's use in the method that follows.
+    try {
+      new ObjectId(movieId);
+    } catch (IllegalArgumentException e) {
+      // value cannot be transformed into mongodb ObjectID
+      return false;
+    }
     return true;
   }
 
